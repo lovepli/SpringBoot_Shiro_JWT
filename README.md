@@ -3,6 +3,188 @@
 `主要实现了jwt和shiro的整合，关闭了shiro的session，全局捕捉异常，实现前后端分离，
 解决跨域问题，RBAC权限模型，实现快速开发 ，Shiro基于SpringBoot +JWT搭建简单的restful服务
 `
+###### GlobalExceptionHandler(全局异常捕捉)
+```java
+
+/**
+ * @Author zhangyukang
+ * @Date 2020/3/2 8:21
+ * @Version 1.0
+ **/
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+
+    //处理Get请求中 使用@Valid 验证路径中请求实体校验失败后抛出的异常
+    @ExceptionHandler(BindException.class)
+    @ResponseBody
+    public ResponseBean BindExceptionHandler(BindException e) {
+        String message = e.getBindingResult().getAllErrors().stream().map(DefaultMessageSourceResolvable::getDefaultMessage).collect(Collectors.joining());
+        return ResponseBean.error(message);
+    }
+
+    //处理请求参数格式错误 @RequestParam上validate失败后抛出的异常是javax.validation.ConstraintViolationException
+    @ExceptionHandler(ConstraintViolationException.class)
+    @ResponseBody
+    public ResponseBean ConstraintViolationExceptionHandler(ConstraintViolationException e) {
+        String message = e.getConstraintViolations().stream().map(ConstraintViolation::getMessage).collect(Collectors.joining());
+        return ResponseBean.error(message);
+    }
+
+    //处理请求参数格式错误 @RequestBody上validate失败后抛出的异常是MethodArgumentNotValidException异常。
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    @ResponseBody
+    public ResponseBean MethodArgumentNotValidExceptionHandler(MethodArgumentNotValidException e) {
+        String message = e.getBindingResult().getAllErrors().stream().map(DefaultMessageSourceResolvable::getDefaultMessage).collect(Collectors.joining());
+        return ResponseBean.error(message);
+    }
+
+    /**
+     * 处理自定义的业务异常
+     * @param req
+     * @param e
+     * @return
+     */
+    @ExceptionHandler(value = BizException.class)
+    @ResponseBody
+    public  ResponseBean bizExceptionHandler(HttpServletRequest req, BizException e){
+        return ResponseBean.error(e.getErrorCode(),e.getErrorMsg());
+    }
+
+    /**
+     * shiro的异常
+     * @param e
+     * @return
+     */
+    @ResponseStatus(HttpStatus.UNAUTHORIZED)
+    @ExceptionHandler(ShiroException.class)
+    public ResponseBean handle401(ShiroException e) {
+        return new ResponseBean(401, e.getMessage(), null);
+    }
+
+
+    /**
+     * 自定义的授权异常
+     * UnauthorizedException
+     * @param e
+     * @return
+     */
+    @ResponseStatus(HttpStatus.UNAUTHORIZED)
+    @ExceptionHandler(UnauthorizedException.class)
+    public ResponseBean handle401(UnauthorizedException e) {
+        return new ResponseBean(401, e.getMessage(), null);
+    }
+
+    /**
+     * 捕捉其他所有异常
+     * @param request
+     * @param ex
+     * @return
+     */
+    @ExceptionHandler(Exception.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ResponseBean globalException(HttpServletRequest request, Throwable ex) {
+        return new ResponseBean(getStatus(request).value(), "服务器异常"+ex.getMessage(), null);
+    }
+
+    /**
+     * 获取状态码
+     * @param request
+     * @return
+     */
+    private HttpStatus getStatus(HttpServletRequest request) {
+        Integer statusCode = (Integer) request.getAttribute("javax.servlet.error.status_code");
+        if (statusCode == null) {
+            return HttpStatus.INTERNAL_SERVER_ERROR;
+        }
+        return HttpStatus.valueOf(statusCode);
+    }
+}
+
+```
+
+
+###### UserController (用户API接口)
+```java
+
+/**
+ * @Author zhangyukang
+ * @Date 2020/3/1 14:21
+ * @Version 1.0
+ **/
+@RequestMapping("/user")
+@RestController
+public class UserController {
+
+    @Autowired
+    private UserService userService;
+
+
+    /**
+     * 用户登入
+     * @param userVO
+     * @return
+     */
+    @PostMapping("/login")
+    public ResponseBean login(@Valid UserVO userVO){
+        @NotNull(message = "用户名不为空") String username = userVO.getUsername();
+        @NotNull(message = "密码不为空") String password = userVO.getPassword();
+        User user = userService.findByUsername(username);
+        String salt="";
+        if(user!=null){
+            salt=user.getPasswordSalt();
+        }
+        //生成token
+        String token = JWTUtils.sign(username, MD5Utils.md5Encryption(password,salt));
+        //执行登入：（出现异常被全局异常捕捉）
+        SecurityUtils.getSubject().login(new JWTToken(token));
+
+        return ResponseBean.success(token);
+    }
+
+    /**
+     * 获取用户菜单
+     * @return
+     */
+    @GetMapping("/listMenu")
+    public ResponseBean listMenu(){
+        List<MenuVO> menuVOList=userService.findUserMenus();
+        return ResponseBean.success(menuVOList);
+    }
+
+    /**
+     * 用户列表
+     * @return
+     */
+    @GetMapping("/list")
+    public ResponseBean listUser(UserPageQueryVO pageQueryVO){
+        PageVO<User> page = userService.findUserByQueryVO(pageQueryVO);
+        return ResponseBean.success(page);
+    }
+
+    /**
+     * 删除用户
+     * @return
+     */
+    @DeleteMapping("/delete/{id}")
+    public ResponseBean delete(@PathVariable Long id){
+        userService.deleteById(id);
+        return ResponseBean.success();
+    }
+
+    /**
+     * 保存用户
+     * @param user
+     * @return
+     */
+    @PostMapping("/add")
+    public ResponseBean add(User user){
+        userService.add(user);
+        return ResponseBean.success();
+    }
+
+}
+```
 
 ###### MyRealm
 
@@ -77,7 +259,7 @@ public class MyRealm extends AuthorizingRealm {
 ```
 
 
-######JWTFilter
+###### JWTFilter
 ```java
 
 @Slf4j
